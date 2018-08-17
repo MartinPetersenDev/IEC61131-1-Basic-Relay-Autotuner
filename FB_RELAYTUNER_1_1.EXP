@@ -1,0 +1,357 @@
+
+(* @NESTEDCOMMENTS := 'Yes' *)
+(* @PATH := '' *)
+(* @OBJECTFLAGS := '0, 8' *)
+(* @SYMFILEFLAGS := '2048' *)
+FUNCTION_BLOCK FB_RELAYTUNER
+(*
+DESCRIPTION:
+Basic Relay Autotuner for IEC 61131-1 languages
+
+AUTHOR:
+Martin Petersen (http://firmaetpetersen.dk)
+
+VERSION: 
+1.0	05-06-2018	Initial version
+1.1	17-08-2018	Added parameters for setting minimum change in proces variable (MinChangePct), number of tuning cycles (NoCycles [1-10]) and functionality to remove max and min measurement outliers before calculating parameters (RemoveOutliers).
+
+GENERAL INFORMATION:
+This is an IEC 61131-1 implementation for a relay based autotuner. It's purpose is to be highly portable between PLC's,
+thus it is a very general implementation, and requires the use of surrounding logic when implemented.
+
+The tuner manipulates the proces and calculates the proces ultimate gain and period. These values can be used to calculate
+PID parameters with the suggested values below.
+
+The calculation parameters are designed for the ideal PID algorithm 
+	OUTPUT = Kc * ( e(t) + 1/Ti integral_e(t) d t + Td*e'(t) )
+
+BASIC USAGE:
+ 
+1) 	Configure StepChange, InputMin, InputMax and PID_Output
+2)	Optionally configure MinChangePct, NoCycles and RemoveOutliers
+3) 	Connect the program to ProcesInput and ControlOutput
+4) 	Run the plant at a realistic operating point, and wait for a steady state process (THIS IS VERY IMPORTANT)!
+5) 	Put the PID controller in manual mode
+6) 	Start the tuner with TunerStart=TRUE
+7) 	When the program finishes, the outputs Kc and Pu can be used to calculate PID parameters. 
+   	An optional DeadTime is also measured, but only make the user aware of the relation between deadtime and the proces period.
+8) 	Calculate the new PID parameters
+9) 	Disable the tuner with TunerStart=FALSE
+10) 	Put the PID controller in auto mode
+11)	Sometimes the proces will achieve a better steady state after tuning, and a new tuning can be done.
+
+Suggested PID parameters
+				Kc		Ti		Td
+Original ZN		0,6*Ku		Pu/2		Pu/8
+Little Overshoot	0,33*Ku		Pu/2		Pu/3
+No overshoot		0,2*Ku		Pu/2		Pu/3
+
+Suggested PI parameters
+				Kc		Ti		
+Original ZN		0,45*Ku		Pu/1,2	
+Little Overshoot	0,25*Ku		Pu/1,2	
+No overshoot		0,15*Ku		Pu/1,2
+
+LICENSE:
+This is free AND unencumbered software released into the public domain.
+
+Anyone is free TO copy, modify, publish, use, compile, sell, OR
+distribute this software, either in source code form OR as a compiled
+binary, FOR any purpose, commercial OR non-commercial, AND BY any
+means.
+
+In jurisdictions that recognize copyright laws, the author OR authors
+OF this software dedicate any AND all copyright interest in the
+software TO the public domain. We make this dedication FOR the benefit
+OF the public AT large AND TO the detriment OF our heirs AND
+successors. We intend this dedication TO be an overt act OF
+relinquishment in perpetuity OF all present AND future rights TO this
+software under copyright law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
+ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
+
+FOR more information, please refer TO <http://unlicense.org>
+*)
+VAR
+	Step:INT:=0;
+	PT:TIME:=T#1h;
+	ET:TIME;
+	TimerStart:BOOL;
+	Timer:TON;
+	Q:BOOL;
+	n:INT; (* counter *)
+	i:INT; (* index *)
+	j:INT; (* index *)
+	iMin:INT;
+	ProcesMax: ARRAY [1..10] OF REAL;
+	ProcesMin: ARRAY [1..10] OF REAL;
+	ProcesTime: ARRAY[1..10] OF REAL;
+	a_Array: ARRAY [1..10] OF REAL;
+	Pu_Array: ARRAY [1..10] OF REAL;
+	_Temp: REAL;
+	NoiseMax:REAL;
+	NoiseMin:REAL;
+	Noise:REAL;
+	TimeNoise:TIME:=T#5s;
+	ProcesInitial:REAL;
+	OldTunerStart:BOOL;
+	a:REAL;					(* Proces amplitude *)
+	oldn: INT;
+	OldTimerStart: BOOL;
+	Offset:REAL;
+	MinChange:REAL;
+	noSamples:INT;
+END_VAR
+VAR_INPUT
+	TunerStart:BOOL;
+	ProcesInput:REAL;
+	InputMax:REAL;
+	InputMin:REAL;
+	StepChange:REAL;
+	PID_Output:REAL;
+	TimeStable: TIME := T#10s;
+	MinChangePct:REAL := 0.005;
+	NoCycles:INT:=5;
+	RemoveOutliers:BOOL:=TRUE;
+END_VAR
+VAR_OUTPUT
+	ControlOutput:REAL;
+	Done:BOOL;
+	WaitStable:BOOL;
+	DetectNoise:BOOL;
+	Tuning:BOOL;
+	Ku:REAL;				(* Ultimate gain *)
+	Pu:REAL;				(* Proces periode *)
+	ProcesDeadTime: REAL;	(* Proces deadtime *)
+END_VAR
+(* @END_DECLARATION := '0' *)
+(* General purpose timer *)
+Timer(IN:= TimerStart, PT:= PT, Q=> Q, ET=> ET);
+
+(* Start on rising edge *)
+IF TunerStart AND NOT OldTunerStart THEN
+	Step := 1;
+END_IF;
+OldTunerStart := TunerStart;
+
+(* Cleanup variables *)
+IF NOT TunerStart THEN
+	ControlOutput := 0;
+	TimerStart := FALSE;
+	Done:=FALSE;
+	WaitStable:=FALSE;
+	DetectNoise:=FALSE;
+	Tuning:=FALSE;
+END_IF;
+
+
+(* Init *)
+IF Step = 1 THEN
+	TimerStart := FALSE;
+	FOR n := 1 TO NoCycles DO
+		ProcesMax[n] := 0;
+		ProcesMin[n] := 0;
+		ProcesTime[n] := 0;
+		a_Array[n] := 0;
+		Pu_Array[n] := 0;
+	END_FOR;
+	n := 1;
+	oldn := 0;
+	ProcesInitial := ProcesInput;
+	NoiseMax := ProcesInput;
+	NoiseMin := ProcesInput;
+	Noise := ProcesInput;
+	Done := FALSE;
+	Ku := 0;
+	Pu := 0;
+	a := 0;
+	Step := 10;
+	Offset := PID_Output;
+	ControlOutput := Offset;
+	MinChange := MinChangePct * (InputMax - InputMin);
+	WaitStable := FALSE;
+	DetectNoise := FALSE;
+	Tuning := FALSE;
+END_IF;
+
+(* Wait stable proces *)
+IF Step = 10 THEN
+	TimerStart := TRUE;
+	WaitStable := TRUE;
+	DetectNoise := FALSE;
+	Tuning := FALSE;
+	IF ET >= TimeStable THEN
+		TimerStart := FALSE;
+		Step := 11;
+	END_IF;
+END_IF;
+
+(* Detect noise *)
+IF Step = 11 AND (TimerStart = OldTimerStart) THEN
+	TimerStart := TRUE;
+	WaitStable := FALSE;
+	DetectNoise := TRUE;
+	Tuning := FALSE;
+
+	IF ProcesInput > NoiseMax THEN
+		NoiseMax := ProcesInput;
+	END_IF;
+
+	IF ProcesInput < NoiseMin THEN
+		NoiseMin := ProcesInput;
+	END_IF;
+
+	Noise := (NoiseMax - NoiseMin);
+
+	IF ET >= TimeNoise THEN
+		TimerStart := FALSE;
+		Step := 20;
+	END_IF;
+END_IF;
+
+(* Bump process *)
+IF Step = 20 AND (TimerStart = OldTimerStart) THEN
+	TimerStart := TRUE;
+	WaitStable := FALSE;
+	DetectNoise := FALSE;
+	Tuning := TRUE;
+	ControlOutput := Offset + StepChange;
+	IF ProcesInput > ProcesInitial + MinChange + Noise THEN
+		TimerStart := FALSE;
+		ProcesDeadTime :=TIME_TO_REAL(ET)/1000;
+		Step := 30;
+	END_IF;
+END_IF;
+
+(* Begin cycle n - Negative step*)
+IF Step = 30 AND (TimerStart = OldTimerStart) THEN
+	TimerStart := TRUE;
+	ControlOutput := Offset - Stepchange;
+
+	(* Store Proces Input one time on change of n *)
+	IF n <> oldn THEN
+		ProcesMin[n] := ProcesInput;
+		ProcesMax[n] := ProcesInput;
+		oldn := n;
+	END_IF
+
+	(* Store minimum proces input *)
+	IF ProcesInput < ProcesMin[n] THEN
+		ProcesMin[n] := ProcesInput;
+	END_IF;
+
+	IF  ProcesInput < ProcesInitial - MinChange - Noise THEN
+		Step := 40;
+	END_IF;
+END_IF;
+
+(* Cycle n - Positive step *)
+IF Step = 40 THEN
+	ControlOutput := Offset + Stepchange;
+
+	(* Store maximum proces input *)
+	IF ProcesInput > ProcesMin[n] THEN
+		ProcesMax[n] := ProcesInput;
+	END_IF;
+
+	IF  ProcesInput > ProcesInitial + MinChange + Noise THEN
+		Step := 50;
+	END_IF;
+END_IF;
+
+(* End cycle n *)
+IF Step = 50 THEN
+	TimerStart := FALSE;
+	ProcesTime[n] := TIME_TO_REAL(ET)/1000;
+	IF n < NoCycles THEN
+		n := n + 1;
+		Step := 30;
+	ELSE
+		Step := 60;
+	END_IF;
+END_IF;
+
+(* Calculate parameters *)
+IF Step = 60 THEN
+
+	(* Calculate a and Pu values *)
+	FOR n := 1 TO NoCycles DO
+		a_Array[n] := ABS( ProcesMax[n] - ProcesMin[n] ) / 2;
+		Pu_Array[n] := ProcesTime[n];
+	END_FOR;
+
+	(* Sort arrays *)
+	FOR j := 1 TO (NoCycles - 1) DO
+		iMin :=j;
+
+		FOR i := j TO NoCycles DO
+			IF a_Array[i] < a_Array[iMin] THEN
+				iMin := i;
+			END_IF;
+		END_FOR;
+		IF iMin <> j THEN
+			_Temp := a_Array[j];
+			a_Array[j] := a_Array[iMin];
+			a_Array[iMin] := _Temp;
+		END_IF;
+	END_FOR;
+
+	FOR j := 1 TO (NoCycles - 1) DO
+		iMin :=j;
+
+		FOR i := j TO NoCycles DO
+			IF Pu_Array[i] < Pu_Array[iMin] THEN
+				iMin := i;
+			END_IF;
+		END_FOR;
+		IF iMin <> j THEN
+			_Temp := Pu_Array[j];
+			Pu_Array[j] := Pu_Array[iMin];
+			Pu_Array[iMin] := _Temp;
+		END_IF;
+	END_FOR;
+
+	(* Remove outliers, but not using largest sample *)
+	IF RemoveOutliers THEN
+		FOR i := 1 TO (NoCycles - 1) DO
+			a_Array[i] := a_Array[i+1];
+		END_FOR;
+		a_Array[NoCycles] := 0;
+		a_Array[NoCycles-1] := 0;
+
+		FOR i := 1 TO (NoCycles - 1) DO
+			Pu_Array[i] := Pu_Array[i+1];
+		END_FOR;
+		Pu_Array[NoCycles] := 0;
+		Pu_Array[NoCycles-1] := 0;
+
+		noSamples := NoCycles - 2; (* Reduce sample size by two eg. smallest (removed in above code), and largest sample which has largest index *)
+	ELSE
+		noSamples := NoCycles;
+	END_IF;
+
+	(* Calculate proces parameters *)
+	FOR n := 1 TO noSamples DO
+		a := a + a_Array[n] / noSamples; 			(* Average of  proces amplitude *)
+		Pu := Pu + Pu_Array[n] / noSamples; 	(* Average of proces periode *)
+	END_FOR;
+	Ku := (4 * StepChange) / (3.14159265 * a); 		(* Ultimate gain *)
+
+	(* Clean up *)
+	Step := 0;
+	ControlOutput := Offset;
+	WaitStable := FALSE;
+	DetectNoise := FALSE;
+	Tuning := FALSE;
+	Done := TRUE;
+END_IF;
+
+(* Edge detection for TimerStart *)
+OldTimerStart := TimerStart;
+END_FUNCTION_BLOCK
