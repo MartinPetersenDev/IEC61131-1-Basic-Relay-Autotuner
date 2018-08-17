@@ -19,28 +19,26 @@ The calculation parameters are designed for the ideal PID algorithm
 	OUTPUT = Kc * ( e(t) + 1/Ti integral_e(t) d t + Td*e'(t) )
 
 BASIC USAGE:
- 
-1) 	Configure StepChange, InputMin, InputMax and PID_Output
-2)	Optionally configure MinChangePct, NoCycles and RemoveOutliers
-3) 	Connect the program to ProcesInput and ControlOutput
-4) 	Run the plant at a realistic operating point, and wait for a steady state process (THIS IS VERY IMPORTANT)!
-5) 	Put the PID controller in manual mode
-6) 	Start the tuner with TunerStart=TRUE
-7) 	When the program finishes, the outputs Kc and Pu can be used to calculate PID parameters. 
-   	An optional DeadTime is also measured, but only make the user aware of the relation between deadtime and the proces period.
-8) 	Calculate the new PID parameters
-9) 	Disable the tuner with TunerStart=FALSE
-10) 	Put the PID controller in auto mode
+
+1)	Configure StepChange, InputMin, InputMax and PID_Output.
+2)	Optionally configure MinChangePct, NoCycles and RemoveOutliers.
+3)	Connect the program to ProcesInput and ControlOutput.
+4)	Run the plant at a realistic operating point, and wait for a steady state process (THIS IS VERY IMPORTANT)!
+5)	Put the PID controller in manual mode.
+6)	Start the tuner with TunerStart=TRUE.
+7)	When the program finishes, the outputs Kc and Pu can be used to calculate PID parameters. An optional DeadTime is also measured, but only make the user aware of the relation between deadtime and the proces period.
+8)	Calculate the new PID parameters.
+9)	Disable the tuner with TunerStart=FALSE.
+10)	Put the PID controller in auto mode.
 11)	Sometimes the proces will achieve a better steady state after tuning, and a new tuning can be done.
 
-Suggested PID parameters
-				          Kc		Ti		Td
-Original ZN		    0,6*Ku		Pu/2		Pu/8
-Little Overshoot	0,33*Ku		Pu/2		Pu/3
-No overshoot		  0,2*Ku		Pu/2		Pu/3
+Suggested PID parameters:
+Original ZN, Kc=0,6*Ku Ti=Pu/2 Td=Pu/8
+Little Overshoot, Kc=0,33*Ku Ti=Pu/2 Td=Pu/3
+No overshoot, Kc=0,2*Ku, Ti=Pu/2, Td=Pu/3
 
-Suggested PI parameters
-				          Kc		Ti		
-Original ZN		    0,45*Ku		Pu/1,2	
-Little Overshoot	0,25*Ku		Pu/1,2	
-No overshoot		  0,15*Ku		Pu/1,2
+Suggested PI parameters:
+Original ZN, Kc=0,45*Ku Ti=Pu/1,2	
+Little Overshoot, Kc=0,25*Ku Ti=Pu/1,2	
+No overshoot, Kc=0,15*Ku Ti=Pu/1,2
+
