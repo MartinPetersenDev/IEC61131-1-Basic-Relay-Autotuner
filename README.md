@@ -33,12 +33,19 @@ BASIC USAGE:
 11)	Sometimes the proces will achieve a better steady state after tuning, and a new tuning can be done.
 
 Suggested PID parameters:
+
 Original ZN, Kc=0,6*Ku Ti=Pu/2 Td=Pu/8
+
 Little Overshoot, Kc=0,33*Ku Ti=Pu/2 Td=Pu/3
+
 No overshoot, Kc=0,2*Ku, Ti=Pu/2, Td=Pu/3
 
 Suggested PI parameters:
+
 Original ZN, Kc=0,45*Ku Ti=Pu/1,2	
+
 Little Overshoot, Kc=0,25*Ku Ti=Pu/1,2	
+
 No overshoot, Kc=0,15*Ku Ti=Pu/1,2
+
 
